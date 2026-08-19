@@ -1,0 +1,190 @@
+<title>星座カメラ</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  /*
+    配色は題材そのものから取っている。天頂の濃紺から地平の街明かりへ向かう縦のグラデーション、
+    星座線に使う青白（高温の星の色）、星の名前に使う琥珀（低温の星の色）。
+    夜空を見るための道具なので、明暗テーマの切り替えはせず暗い側に振り切る。
+    そのぶん背景も文字色もすべて明示的に塗り、閲覧環境の地の色に影響されないようにしてある。
+    Web フォントは使わない。「通信しない」という約束と、
+    ネットのない場所（星がよく見えるのはそういう場所だ）で動くことを優先した。
+  */
+  :root {
+    --sky-top: #04060e;
+    --sky-mid: #070c1a;
+    --sky-horizon: #121a33;
+    --glow: #1d1a12;
+    --panel: rgba(158,180,255,0.055);
+    --line: rgba(180,200,255,0.14);
+    --fg: #e9edff;
+    --muted: #98a2c4;
+    --blue: #7cc8ff;
+    --amber: #f3ce8e;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  /* hidden 属性は、要素側の display 指定より必ず強くする */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      linear-gradient(180deg, transparent 55%, var(--glow) 100%),
+      linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-horizon) 100%);
+    background-color: var(--sky-mid);
+    background-attachment: fixed;
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height: 1.75;
+    -webkit-text-size-adjust: 100%;
+  }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 18px 72px; }
+  header { padding: 18px 0 8px; }
+  h1 {
+    font-size: clamp(1.5rem, 5vw, 1.9rem);
+    margin: 0 0 6px;
+    letter-spacing: 0.16em;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .lede { color: var(--muted); margin: 0; font-size: 0.95rem; max-width: 34em; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin: 18px 0;
+  }
+  #drop.over { border-color: var(--blue); background: rgba(124,200,255,0.08); }
+  .btnrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,0.07);
+    color: var(--fg); font: inherit; font-size: 0.95rem; padding: 11px 18px;
+    border-radius: 999px; cursor: pointer; transition: 0.15s;
+  }
+  .btn:hover { background: rgba(255,255,255,0.13); }
+  .btn.primary {
+    background: var(--amber); border-color: transparent;
+    color: #17130a; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .btn.primary:hover { background: #ffdda4; }
+  .btn.on { background: rgba(124,200,255,0.22); border-color: var(--blue); color: #dff0ff; }
+  .btn.small { padding: 7px 13px; font-size: 0.85rem; }
+  label.btn { display: inline-block; }
+  input[type=file] { display: none; }
+  .note { color: var(--muted); font-size: 0.85rem; margin: 10px 0 0; }
+  #status { display: flex; gap: 12px; align-items: center; }
+  .spin {
+    width: 18px; height: 18px; border-radius: 50%; flex: none;
+    border: 2px solid rgba(255,255,255,0.25); border-top-color: var(--blue);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #statusSub { color: var(--muted); font-size: 0.85rem; }
+  .stage { position: relative; line-height: 0; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
+  .stage canvas { width: 100%; height: auto; display: block; }
+  .stage #ov { position: absolute; inset: 0; }
+  h2 { font-size: 1.15rem; margin: 22px 0 10px; }
+  #headline { font-size: clamp(1.1rem, 4vw, 1.3rem); font-weight: 700; margin: 16px 0 8px; text-wrap: balance; }
+  dl.facts { margin: 12px 0 0; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 0.92rem; }
+  .row dt { flex: 0 0 9.5em; color: var(--muted); margin: 0; }
+  .row dd { margin: 0; }
+  #conList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chip {
+    appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,0.06);
+    color: var(--fg); font: inherit; font-size: 0.9rem; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .chip.on { background: rgba(124,200,255,0.25); border-color: var(--blue); }
+  .chip .pct { color: var(--muted); font-size: 0.78rem; margin-left: 6px; }
+  #tapInfo { margin-top: 10px; font-size: 0.9rem; color: var(--amber); font-variant-numeric: tabular-nums; }
+  ul.tips { margin: 8px 0 0; padding-left: 1.2em; color: var(--muted); font-size: 0.9rem; }
+  ul.tips li { margin: 4px 0; }
+  footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
+  footer a { color: var(--muted); }
+  #saveImg { width: 100%; height: auto; margin-top: 12px; border-radius: var(--radius); }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>星座カメラ</h1>
+    <p class="lede">夜空の写真を選ぶと、写っている星の並びから位置を割り出して、星座を重ねて描きます。</p>
+  </header>
+
+  <div class="card" id="drop">
+    <div class="btnrow">
+      <label class="btn primary" for="file">写真を選ぶ / 撮る</label>
+      <input type="file" id="file" accept="image/*">
+      <button class="btn" id="sample">サンプルで試す</button>
+    </div>
+    <p class="note">
+      写真はあなたの端末の中だけで処理します。どこにも送信しません（このページは通信せずに動きます）。
+      ここにドラッグ＆ドロップしても読み込めます。
+    </p>
+  </div>
+
+  <div class="card" id="status" hidden>
+    <div class="spin"></div>
+    <div>
+      <div id="statusMain">準備中…</div>
+      <div id="statusSub"></div>
+    </div>
+  </div>
+
+  <div id="result" hidden>
+    <div id="headline"></div>
+    <div class="stage">
+      <canvas id="photo"></canvas>
+      <canvas id="ov"></canvas>
+    </div>
+    <div id="tapInfo" hidden></div>
+
+    <div class="btnrow" style="margin-top:14px">
+      <button class="btn small" id="t_lines">星座線</button>
+      <button class="btn small" id="t_names">星座名</button>
+      <button class="btn small" id="t_starNames">星の名前</button>
+      <button class="btn small" id="t_stars">星の位置</button>
+      <button class="btn small" id="save">画像にする</button>
+    </div>
+    <p class="note">写真をタップすると、その場所に何があるかを表示します。</p>
+    <img id="saveImg" hidden alt="星座を重ねた画像">
+    <p class="note" id="saveHint" hidden>この画像を長押し（パソコンでは右クリック）すると保存できます。</p>
+
+    <h2>写っている星座</h2>
+    <div id="conList"></div>
+
+    <h2>判定の中身</h2>
+    <dl class="facts" id="facts"></dl>
+  </div>
+
+  <div class="card" id="failure" hidden>
+    <strong>星座を特定できませんでした。</strong>
+    <p class="note" id="failReason"></p>
+    <ul class="tips">
+      <li>星が数個しか写っていないと特定できません。10 個以上写っている写真だとほぼ確実に解けます。</li>
+      <li>ズームせずに広めに撮る（画角が広いほど手がかりが増えます）。</li>
+      <li>ピントを無限遠に合わせ、手すりなどに固定して撮る。</li>
+      <li>街明かりの少ない方角へ向ける。月が近いと星が見えなくなります。</li>
+      <li>SNS に上げたあとの画像は圧縮で星が消えていることがあります。撮ったままの写真を使ってください。</li>
+    </ul>
+  </div>
+
+  <footer>
+    <p>
+      星表は Hipparcos カタログ（6 等まで 5,044 星）、星座線と星座名は IAU の定義にもとづく
+      <a href="https://github.com/ofrohn/d3-celestial">d3-celestial</a> のデータ（BSD-3-Clause）を使っています。座標は J2000.0。
+    </p>
+    <p>
+      仕組み: 写真から点光源を検出し、2 つの星の組み合わせを星表の組み合わせに仮に対応させて焦点距離と向きを算出、
+      他の星がどれだけ合うかで正解を選びます（プレートソルビング）。画角が分からなくても解けます。
+    </p>
+  </footer>
+</div>
+
+<script type="module">
+/*INLINE*/
+</script>

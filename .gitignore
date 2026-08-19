@@ -1,0 +1,5 @@
+# 星表の元データ（tools/build-data.mjs が必要時に取得する）
+tools/*.json
+
+node_modules/
+.DS_Store
