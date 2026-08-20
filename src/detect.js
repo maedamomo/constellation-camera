@@ -7,6 +7,10 @@
 //   3. 背景を引き、星のにじみと同じ幅のガウシアンをかける（整合フィルタ）
 //      — 1 画素だけのノイズの尖りを潰し、星のような広がりだけを残す
 //   4. 局所ノイズの定数倍でしきい値処理し、連結成分の重心と光量を出す
+//   5. 見つかった数が少なければ、より大きな幅でもう一度かける
+//      — 露光が長いと星は点ではなく線に流れる。点に合わせた幅では拾えないので、
+//        幅を変えて掛け直す（流れた星は重心が露光の中央の位置に当たるため、
+//        位置合わせにはそのまま使える）
 //
 // 木・建物・車のライトなどは点光源として拾ってしまうが、
 // 後段の照合（solve.js）が外れ値として無視する。
@@ -195,13 +199,13 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
   if (stars.length >= 8) {
     const ws = stars.map((s) => s.width).sort((a, b) => a - b);
     const med = ws[ws.length >> 1];
-    kept = stars.filter((s) => s.width >= med * 0.72 && s.width <= Math.max(6, med * 3));
+    const wideLimit = Math.max(6 * (opt.psf / 1.1), med * 3);
+    kept = stars.filter((s) => s.width >= med * 0.72 && s.width <= wideLimit);
   }
 
   kept.sort((a, b) => b.flux - a.flux);
-  const out = kept.slice(0, opt.maxStars);
-  for (const s of out) s.imag = -2.5 * Math.log10(s.flux);
-  return out;
+  for (const s of kept) s.psf = opt.psf;
+  return kept;
 }
 
 /**
@@ -234,15 +238,44 @@ export function detectStars(img, opt = {}) {
   // ムラは細かい形を持たないので、8 分の 1 に縮めてから計算する（そのぶん速い）。
   subtractBroad(sub, width, height, Math.max(8, Math.round(Math.min(width, height) / 90)));
 
-  const { out: sm, kf } = gaussianBlur(sub, width, height, psf);
+  // 点像に合わせた幅から始め、足りなければ幅を広げて掛け直す。
+  // 幅を広げると、線に流れた星も 1 つの塊として拾えるようになる。
+  const scales = opt.scales ?? [psf, psf * 2.2, psf * 4.5];
+  const enough = opt.enough ?? 40;
+  const maxStars = opt.maxStars ?? 150;
+  const merged = [];
+  const perScale = [];
 
-  const stars = extractComponents(sm, sub, noise, width, height, kSigma, kf, {
-    maxStars: opt.maxStars ?? 150,
-    minArea: opt.minArea ?? 3,
-    maxArea: opt.maxArea ?? Math.max(150, Math.round(width * height * 0.0004)),
-    maxElong: opt.maxElong ?? 3.5,
-  });
+  for (const sc of scales) {
+    const { out: sm, kf } = gaussianBlur(sub, width, height, sc);
+    const comps = extractComponents(sm, sub, noise, width, height, kSigma, kf, {
+      psf: sc,
+      minArea: opt.minArea ?? 3,
+      maxArea: opt.maxArea ?? Math.max(150, Math.round(width * height * 0.0004)),
+      // 流れた星は細長くなるので、幅を広げて拾う回では伸びの上限もゆるめる
+      maxElong: opt.maxElong ?? (sc > psf * 1.5 ? 8 : 4),
+    });
+    perScale.push(comps.length);
+    // すでに拾った点の近くにあるものは同じ星とみなして捨てる
+    const minSep = Math.max(4, sc * 2.5);
+    for (const c of comps) {
+      let dup = false;
+      for (const m of merged) {
+        if ((m.x - c.x) ** 2 + (m.y - c.y) ** 2 < minSep * minSep) { dup = true; break; }
+      }
+      if (!dup) merged.push(c);
+    }
+    if (merged.length >= enough) break;
+  }
+
+  merged.sort((a, b) => b.flux - a.flux);
+  const stars = merged.slice(0, maxStars);
+  for (const s of stars) s.imag = -2.5 * Math.log10(s.flux);
 
   const sorted = Array.from(st.sg).sort((a, b) => a - b);
-  return { stars, noiseMedian: sorted[sorted.length >> 1] || 0, nAll: stars.length };
+  return {
+    stars, perScale,
+    noiseMedian: sorted[sorted.length >> 1] || 0,
+    nAll: merged.length,
+  };
 }

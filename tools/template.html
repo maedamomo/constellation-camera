@@ -102,6 +102,12 @@
   .chip.on { background: rgba(124,200,255,0.25); border-color: var(--blue); }
   .chip .pct { color: var(--muted); font-size: 0.78rem; margin-left: 6px; }
   #tapInfo { margin-top: 10px; font-size: 0.9rem; color: var(--amber); font-variant-numeric: tabular-nums; }
+  .btn[disabled] { opacity: 0.4; cursor: default; }
+  .mk-x { color: #ff8080; font-weight: 700; }
+  .conf { font-weight: 700; }
+  .conf.hi { color: #86e8b0; }
+  .conf.mid { color: var(--amber); }
+  .conf.lo { color: #ff9a9a; }
   ul.tips { margin: 8px 0 0; padding-left: 1.2em; color: var(--muted); font-size: 0.9rem; }
   ul.tips li { margin: 4px 0; }
   footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
@@ -135,7 +141,7 @@
     </div>
   </div>
 
-  <div id="result" hidden>
+  <div id="stageBlock" hidden>
     <div id="headline"></div>
     <div class="stage">
       <canvas id="photo"></canvas>
@@ -148,12 +154,15 @@
       <button class="btn small" id="t_names">星座名</button>
       <button class="btn small" id="t_starNames">星の名前</button>
       <button class="btn small" id="t_stars">星の位置</button>
+      <button class="btn small" id="t_dets">検出した点</button>
       <button class="btn small" id="save">画像にする</button>
     </div>
-    <p class="note">写真をタップすると、その場所に何があるかを表示します。</p>
+    <p class="note" id="stageNote">写真をタップすると、その場所に何があるかを表示します。</p>
     <img id="saveImg" hidden alt="星座を重ねた画像">
     <p class="note" id="saveHint" hidden>この画像を長押し（パソコンでは右クリック）すると保存できます。</p>
+  </div>
 
+  <div id="result" hidden>
     <h2>写っている星座</h2>
     <div id="conList"></div>
 
@@ -164,10 +173,15 @@
   <div class="card" id="failure" hidden>
     <strong>星座を特定できませんでした。</strong>
     <p class="note" id="failReason"></p>
+    <p class="note">
+      上の写真に、アプリが光点として拾った場所を出しています（<span class="mk-x">✕</span> が拾った点）。
+      星の位置に印が付いていなければ検出の問題、印は合っているのに特定できないなら手がかり不足です。
+    </p>
     <ul class="tips">
       <li>星が数個しか写っていないと特定できません。10 個以上写っている写真だとほぼ確実に解けます。</li>
       <li>ズームせずに広めに撮る（画角が広いほど手がかりが増えます）。</li>
       <li>ピントを無限遠に合わせ、手すりなどに固定して撮る。</li>
+      <li>露光が長すぎると星が線に流れます。流れが画面の 2% を超えるあたりから苦しくなります。</li>
       <li>街明かりの少ない方角へ向ける。月が近いと星が見えなくなります。</li>
       <li>SNS に上げたあとの画像は圧縮で星が消えていることがあります。撮ったままの写真を使ってください。</li>
     </ul>

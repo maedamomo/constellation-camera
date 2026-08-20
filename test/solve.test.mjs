@@ -44,6 +44,8 @@ const CASES = [
   { name: 'ぶれ気味（にじみ大）', ra: 150, dec: 25, roll: 33, fov: 60, psf: 2.6 },
   { name: '周辺減光＋ホットピクセル', ra: 83, dec: 0, roll: 20, fov: 70, vignette: 0.6, hotPixels: 40 },
   { name: '日周運動で星が流れる(0.5度)', ra: 290, dec: 30, roll: 15, fov: 65, trailDeg: 0.5 },
+  { name: '星が大きく流れる(0.8度)', ra: 83, dec: 0, roll: 15, fov: 65, trailDeg: 0.8 },
+  { name: '星が大きく流れる(1.2度)', ra: 83, dec: 0, roll: 15, fov: 65, trailDeg: 1.2 },
   { name: '甘い結像＋強い街明かり', ra: 60, dec: 20, roll: -25, fov: 68, softBlur: true, glow: 120, glowX: 40, noise: 6, limitMag: 4.6 },
   { name: '悪条件全部入り', ra: 200, dec: 0, roll: 140, fov: 72, vignette: 0.5, hotPixels: 25, softBlur: true, trailDeg: 0.25, spurious: 12, glow: 70, noise: 5, limitMag: 4.8, k1: -0.04 },
 ];

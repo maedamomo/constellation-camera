@@ -102,6 +102,12 @@
   .chip.on { background: rgba(124,200,255,0.25); border-color: var(--blue); }
   .chip .pct { color: var(--muted); font-size: 0.78rem; margin-left: 6px; }
   #tapInfo { margin-top: 10px; font-size: 0.9rem; color: var(--amber); font-variant-numeric: tabular-nums; }
+  .btn[disabled] { opacity: 0.4; cursor: default; }
+  .mk-x { color: #ff8080; font-weight: 700; }
+  .conf { font-weight: 700; }
+  .conf.hi { color: #86e8b0; }
+  .conf.mid { color: var(--amber); }
+  .conf.lo { color: #ff9a9a; }
   ul.tips { margin: 8px 0 0; padding-left: 1.2em; color: var(--muted); font-size: 0.9rem; }
   ul.tips li { margin: 4px 0; }
   footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--line); margin-top: 40px; padding-top: 16px; }
@@ -135,7 +141,7 @@
     </div>
   </div>
 
-  <div id="result" hidden>
+  <div id="stageBlock" hidden>
     <div id="headline"></div>
     <div class="stage">
       <canvas id="photo"></canvas>
@@ -148,12 +154,15 @@
       <button class="btn small" id="t_names">星座名</button>
       <button class="btn small" id="t_starNames">星の名前</button>
       <button class="btn small" id="t_stars">星の位置</button>
+      <button class="btn small" id="t_dets">検出した点</button>
       <button class="btn small" id="save">画像にする</button>
     </div>
-    <p class="note">写真をタップすると、その場所に何があるかを表示します。</p>
+    <p class="note" id="stageNote">写真をタップすると、その場所に何があるかを表示します。</p>
     <img id="saveImg" hidden alt="星座を重ねた画像">
     <p class="note" id="saveHint" hidden>この画像を長押し（パソコンでは右クリック）すると保存できます。</p>
+  </div>
 
+  <div id="result" hidden>
     <h2>写っている星座</h2>
     <div id="conList"></div>
 
@@ -164,10 +173,15 @@
   <div class="card" id="failure" hidden>
     <strong>星座を特定できませんでした。</strong>
     <p class="note" id="failReason"></p>
+    <p class="note">
+      上の写真に、アプリが光点として拾った場所を出しています（<span class="mk-x">✕</span> が拾った点）。
+      星の位置に印が付いていなければ検出の問題、印は合っているのに特定できないなら手がかり不足です。
+    </p>
     <ul class="tips">
       <li>星が数個しか写っていないと特定できません。10 個以上写っている写真だとほぼ確実に解けます。</li>
       <li>ズームせずに広めに撮る（画角が広いほど手がかりが増えます）。</li>
       <li>ピントを無限遠に合わせ、手すりなどに固定して撮る。</li>
+      <li>露光が長すぎると星が線に流れます。流れが画面の 2% を超えるあたりから苦しくなります。</li>
       <li>街明かりの少ない方角へ向ける。月が近いと星が見えなくなります。</li>
       <li>SNS に上げたあとの画像は圧縮で星が消えていることがあります。撮ったままの写真を使ってください。</li>
     </ul>
@@ -570,6 +584,10 @@ class SkyIndex {
 //   3. 背景を引き、星のにじみと同じ幅のガウシアンをかける（整合フィルタ）
 //      — 1 画素だけのノイズの尖りを潰し、星のような広がりだけを残す
 //   4. 局所ノイズの定数倍でしきい値処理し、連結成分の重心と光量を出す
+//   5. 見つかった数が少なければ、より大きな幅でもう一度かける
+//      — 露光が長いと星は点ではなく線に流れる。点に合わせた幅では拾えないので、
+//        幅を変えて掛け直す（流れた星は重心が露光の中央の位置に当たるため、
+//        位置合わせにはそのまま使える）
 //
 // 木・建物・車のライトなどは点光源として拾ってしまうが、
 // 後段の照合（solve.js）が外れ値として無視する。
@@ -758,13 +776,13 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
   if (stars.length >= 8) {
     const ws = stars.map((s) => s.width).sort((a, b) => a - b);
     const med = ws[ws.length >> 1];
-    kept = stars.filter((s) => s.width >= med * 0.72 && s.width <= Math.max(6, med * 3));
+    const wideLimit = Math.max(6 * (opt.psf / 1.1), med * 3);
+    kept = stars.filter((s) => s.width >= med * 0.72 && s.width <= wideLimit);
   }
 
   kept.sort((a, b) => b.flux - a.flux);
-  const out = kept.slice(0, opt.maxStars);
-  for (const s of out) s.imag = -2.5 * Math.log10(s.flux);
-  return out;
+  for (const s of kept) s.psf = opt.psf;
+  return kept;
 }
 
 /**
@@ -797,17 +815,46 @@ function detectStars(img, opt = {}) {
   // ムラは細かい形を持たないので、8 分の 1 に縮めてから計算する（そのぶん速い）。
   subtractBroad(sub, width, height, Math.max(8, Math.round(Math.min(width, height) / 90)));
 
-  const { out: sm, kf } = gaussianBlur(sub, width, height, psf);
+  // 点像に合わせた幅から始め、足りなければ幅を広げて掛け直す。
+  // 幅を広げると、線に流れた星も 1 つの塊として拾えるようになる。
+  const scales = opt.scales ?? [psf, psf * 2.2, psf * 4.5];
+  const enough = opt.enough ?? 40;
+  const maxStars = opt.maxStars ?? 150;
+  const merged = [];
+  const perScale = [];
 
-  const stars = extractComponents(sm, sub, noise, width, height, kSigma, kf, {
-    maxStars: opt.maxStars ?? 150,
-    minArea: opt.minArea ?? 3,
-    maxArea: opt.maxArea ?? Math.max(150, Math.round(width * height * 0.0004)),
-    maxElong: opt.maxElong ?? 3.5,
-  });
+  for (const sc of scales) {
+    const { out: sm, kf } = gaussianBlur(sub, width, height, sc);
+    const comps = extractComponents(sm, sub, noise, width, height, kSigma, kf, {
+      psf: sc,
+      minArea: opt.minArea ?? 3,
+      maxArea: opt.maxArea ?? Math.max(150, Math.round(width * height * 0.0004)),
+      // 流れた星は細長くなるので、幅を広げて拾う回では伸びの上限もゆるめる
+      maxElong: opt.maxElong ?? (sc > psf * 1.5 ? 8 : 4),
+    });
+    perScale.push(comps.length);
+    // すでに拾った点の近くにあるものは同じ星とみなして捨てる
+    const minSep = Math.max(4, sc * 2.5);
+    for (const c of comps) {
+      let dup = false;
+      for (const m of merged) {
+        if ((m.x - c.x) ** 2 + (m.y - c.y) ** 2 < minSep * minSep) { dup = true; break; }
+      }
+      if (!dup) merged.push(c);
+    }
+    if (merged.length >= enough) break;
+  }
+
+  merged.sort((a, b) => b.flux - a.flux);
+  const stars = merged.slice(0, maxStars);
+  for (const s of stars) s.imag = -2.5 * Math.log10(s.flux);
 
   const sorted = Array.from(st.sg).sort((a, b) => a - b);
-  return { stars, noiseMedian: sorted[sorted.length >> 1] || 0, nAll: stars.length };
+  return {
+    stars, perScale,
+    noiseMedian: sorted[sorted.length >> 1] || 0,
+    nAll: merged.length,
+  };
 }
 
 // ===== solve.js =====
@@ -1627,6 +1674,30 @@ function placeText(ctx, boxes, s, x, y, align, fontPx) {
 }
 
 /**
+ * 検出した点を描く。星表と一致したものと、しなかったものを描き分ける。
+ * 「アプリが何を星として見たか」が見えると、うまくいかないときの切り分けができる。
+ */
+function drawDetections(ctx, dets, matchedDetIndices) {
+  const scale = Math.hypot(ctx.canvas.width, ctx.canvas.height) / 1600;
+  const matched = matchedDetIndices || new Set();
+  ctx.lineWidth = Math.max(1, scale * 1.6);
+  for (let i = 0; i < dets.length; i++) {
+    const d = dets[i];
+    const hit = matched.has(i);
+    const r = Math.max(5, scale * 9);
+    ctx.strokeStyle = hit ? 'rgba(120,255,170,0.9)' : 'rgba(255,120,120,0.85)';
+    ctx.beginPath();
+    if (hit) {
+      ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
+    } else {
+      ctx.moveTo(d.x - r, d.y - r); ctx.lineTo(d.x + r, d.y + r);
+      ctx.moveTo(d.x + r, d.y - r); ctx.lineTo(d.x - r, d.y + r);
+    }
+    ctx.stroke();
+  }
+}
+
+/**
  * 重ね描き。
  * @param {CanvasRenderingContext2D} ctx
  * @param {object} sol 解
@@ -1701,6 +1772,10 @@ function drawOverlay(ctx, sol, data, opt = {}) {
       const ly = Math.max(h * 0.04, Math.min(h * 0.96, c.label[1]));
       placeText(ctx, boxes, c.ja, lx, ly, 'center', fs);
     }
+  }
+
+  if (opt.dets && opt.dets.length) {
+    drawDetections(ctx, opt.dets, opt.matchedDets);
   }
 
   if (opt.starNames !== false) {
@@ -1892,7 +1967,7 @@ const WORK_MAX = 1400; // 解析に使う画像の長辺（画素）
 const state = {
   sol: null, dets: null, cons: null, exif: null,
   width: 0, height: 0, only: null,
-  show: { lines: true, names: true, starNames: true, stars: false },
+  show: { lines: true, names: true, starNames: true, stars: false, dets: false },
 };
 
 let CAT = null;
@@ -2007,20 +2082,46 @@ async function analyze(canvas, exif) {
   state.only = null;
   hideStatus();
   render();
+  $('stageBlock').hidden = false;
   $('result').hidden = false;
   $('failure').hidden = true;
-  $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('stageBlock').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/**
+ * 失敗時も写真と検出結果は見せる。
+ * どこを光点として拾ったかが見えれば、撮り直しの手がかりになる。
+ */
 function fail(reason) {
   hideStatus();
+  state.sol = null;
+  state.cons = null;
   $('result').hidden = true;
   $('failure').hidden = false;
   $('failReason').textContent = reason;
+  if (state.dets && state.width) {
+    $('stageBlock').hidden = false;
+    $('headline').textContent = '特定できませんでした';
+    $('stageNote').textContent = 'アプリが光点として拾った場所に ✕ を出しています。';
+    const ov = $('ov');
+    ov.width = state.width; ov.height = state.height;
+    const ctx = ov.getContext('2d');
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    drawDetections(ctx, state.dets, new Set());
+    // 解が無いので、星座系の切り替えは触れないようにする
+    for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = true;
+    $('t_dets').disabled = true;
+    $('save').disabled = true;
+  } else {
+    $('stageBlock').hidden = true;
+  }
 }
 
 function render() {
   const sol = state.sol;
+  for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = false;
+  $('t_dets').disabled = false;
+  $('save').disabled = false;
   const ov = $('ov');
   ov.width = state.width; ov.height = state.height;
   const ctx = ov.getContext('2d');
@@ -2028,7 +2129,10 @@ function render() {
     ...state.show,
     constellations: state.cons,
     only: state.only,
+    dets: state.show.dets ? state.dets : null,
+    matchedDets: state.show.dets ? new Set(sol.matches.map((m) => m.det)) : null,
   });
+  $('stageNote').textContent = '写真をタップすると、その場所に何があるかを表示します。';
   renderInfo();
 }
 
@@ -2045,9 +2149,15 @@ function renderInfo() {
     : '星座の線が入る範囲には届きませんでした';
 
   const rows = [];
+  // 確度: 一致した数が「偶然でこれだけ合う」下限をどれだけ上回ったか
+  const margin = sol.nMatch / Math.max(1, sol.need);
+  const conf = margin >= 2.5 ? ['高', 'hi', 'まず間違いありません']
+    : margin >= 1.5 ? ['中', 'mid', 'おおむね確かです']
+    : ['低', 'lo', '偶然の一致の可能性が残ります。念のため疑ってください'];
+  rows.push(['判定の確度', `<span class="conf ${conf[1]}">${conf[0]}</span> — ${conf[2]}`]);
   rows.push(['写っている範囲', `対角 ${sol.fovDiag.toFixed(0)}度（横 ${sol.fovWidth.toFixed(0)}度 × 縦 ${sol.fovHeight.toFixed(0)}度）`]);
   rows.push(['画面中心の天球座標', `赤経 ${raStr(sol.center[0])} / 赤緯 ${sol.center[1] >= 0 ? '+' : ''}${sol.center[1].toFixed(1)}度`]);
-  rows.push(['星図と一致した星', `${sol.nMatch} 個（位置のずれ ${sol.rms.toFixed(1)} 画素）`]);
+  rows.push(['星図と一致した星', `検出 ${state.dets.length} 個中 ${sol.nMatch} 個（位置のずれ ${sol.rms.toFixed(1)} 画素）`]);
 
   const ex = state.exif;
   if (ex && ex.dateTime && ex.lat != null) {
@@ -2181,7 +2291,7 @@ function init() {
   });
   $('sample').addEventListener('click', useSample);
   $('save').addEventListener('click', composite);
-  for (const key of ['lines', 'names', 'starNames', 'stars']) {
+  for (const key of ['lines', 'names', 'starNames', 'stars', 'dets']) {
     const el = $('t_' + key);
     el.addEventListener('click', () => {
       state.show[key] = !state.show[key];

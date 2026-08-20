@@ -6,7 +6,7 @@ import { detectStars } from './detect.js';
 import { buildCatalog, buildPairIndex, solvePlateGen } from './solve.js';
 import { readExif, fovFromFocal35 } from './exif.js';
 import { toAltAz, dirName } from './altaz.js';
-import { drawOverlay, visibleConstellations, project } from './overlay.js';
+import { drawOverlay, drawDetections, visibleConstellations, project } from './overlay.js';
 import { makeSky } from './sample.js';
 import { sph2vec, vec2sph, matVec, matT, angleBetween, DEG } from './astro.js';
 
@@ -16,7 +16,7 @@ const WORK_MAX = 1400; // 解析に使う画像の長辺（画素）
 const state = {
   sol: null, dets: null, cons: null, exif: null,
   width: 0, height: 0, only: null,
-  show: { lines: true, names: true, starNames: true, stars: false },
+  show: { lines: true, names: true, starNames: true, stars: false, dets: false },
 };
 
 let CAT = null;
@@ -131,20 +131,46 @@ async function analyze(canvas, exif) {
   state.only = null;
   hideStatus();
   render();
+  $('stageBlock').hidden = false;
   $('result').hidden = false;
   $('failure').hidden = true;
-  $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('stageBlock').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/**
+ * 失敗時も写真と検出結果は見せる。
+ * どこを光点として拾ったかが見えれば、撮り直しの手がかりになる。
+ */
 function fail(reason) {
   hideStatus();
+  state.sol = null;
+  state.cons = null;
   $('result').hidden = true;
   $('failure').hidden = false;
   $('failReason').textContent = reason;
+  if (state.dets && state.width) {
+    $('stageBlock').hidden = false;
+    $('headline').textContent = '特定できませんでした';
+    $('stageNote').textContent = 'アプリが光点として拾った場所に ✕ を出しています。';
+    const ov = $('ov');
+    ov.width = state.width; ov.height = state.height;
+    const ctx = ov.getContext('2d');
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    drawDetections(ctx, state.dets, new Set());
+    // 解が無いので、星座系の切り替えは触れないようにする
+    for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = true;
+    $('t_dets').disabled = true;
+    $('save').disabled = true;
+  } else {
+    $('stageBlock').hidden = true;
+  }
 }
 
 function render() {
   const sol = state.sol;
+  for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = false;
+  $('t_dets').disabled = false;
+  $('save').disabled = false;
   const ov = $('ov');
   ov.width = state.width; ov.height = state.height;
   const ctx = ov.getContext('2d');
@@ -152,7 +178,10 @@ function render() {
     ...state.show,
     constellations: state.cons,
     only: state.only,
+    dets: state.show.dets ? state.dets : null,
+    matchedDets: state.show.dets ? new Set(sol.matches.map((m) => m.det)) : null,
   });
+  $('stageNote').textContent = '写真をタップすると、その場所に何があるかを表示します。';
   renderInfo();
 }
 
@@ -169,9 +198,15 @@ function renderInfo() {
     : '星座の線が入る範囲には届きませんでした';
 
   const rows = [];
+  // 確度: 一致した数が「偶然でこれだけ合う」下限をどれだけ上回ったか
+  const margin = sol.nMatch / Math.max(1, sol.need);
+  const conf = margin >= 2.5 ? ['高', 'hi', 'まず間違いありません']
+    : margin >= 1.5 ? ['中', 'mid', 'おおむね確かです']
+    : ['低', 'lo', '偶然の一致の可能性が残ります。念のため疑ってください'];
+  rows.push(['判定の確度', `<span class="conf ${conf[1]}">${conf[0]}</span> — ${conf[2]}`]);
   rows.push(['写っている範囲', `対角 ${sol.fovDiag.toFixed(0)}度（横 ${sol.fovWidth.toFixed(0)}度 × 縦 ${sol.fovHeight.toFixed(0)}度）`]);
   rows.push(['画面中心の天球座標', `赤経 ${raStr(sol.center[0])} / 赤緯 ${sol.center[1] >= 0 ? '+' : ''}${sol.center[1].toFixed(1)}度`]);
-  rows.push(['星図と一致した星', `${sol.nMatch} 個（位置のずれ ${sol.rms.toFixed(1)} 画素）`]);
+  rows.push(['星図と一致した星', `検出 ${state.dets.length} 個中 ${sol.nMatch} 個（位置のずれ ${sol.rms.toFixed(1)} 画素）`]);
 
   const ex = state.exif;
   if (ex && ex.dateTime && ex.lat != null) {
@@ -305,7 +340,7 @@ export function init() {
   });
   $('sample').addEventListener('click', useSample);
   $('save').addEventListener('click', composite);
-  for (const key of ['lines', 'names', 'starNames', 'stars']) {
+  for (const key of ['lines', 'names', 'starNames', 'stars', 'dets']) {
     const el = $('t_' + key);
     el.addEventListener('click', () => {
       state.show[key] = !state.show[key];
