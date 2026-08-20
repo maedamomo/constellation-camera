@@ -789,6 +789,8 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
       stars.push({
         x: cx, y: cy, flux, area, peak, elong, touches, nCore,
         width: Math.sqrt((vxx + vyy) / 2),
+        // 伸びの主軸の向き（ラジアン, -π/2〜π/2）。手ブレで流れた星は全部同じ向きになる
+        theta: 0.5 * Math.atan2(2 * vxy, vxx - vyy),
         sat: rawPeak > 200,
       });
     }
@@ -808,6 +810,40 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
   kept.sort((a, b) => b.flux - a.flux);
   for (const s of kept) s.psf = opt.psf;
   return kept;
+}
+
+/**
+ * 検出した光点を「点像（星らしい）」と「線像（星以外らしい）」に分ける。
+ *
+ * 空中の粒子（羽虫・霧雨・ちり）が近くの明かりを反射すると、
+ * ランダムな向きの短い線として星より明るく写り、明るさ順の上位を占拠する。
+ * 星は点像に写るので、丸くて小さい成分だけを選び直せば照合の材料にできる。
+ * しきい値は画像内の分布から相対的に決める（機種やピントで点像の幅が変わるため）。
+ */
+function classifyDetections(stars) {
+  if (stars.length < 8) {
+    return { points: stars.slice(), streaks: [], junkFraction: 0 };
+  }
+  const ws = stars.map((s) => s.width).sort((a, b) => a - b);
+  const p25 = ws[Math.floor(ws.length * 0.25)];
+  const wCut = Math.max(1.8, p25 * 1.4);
+  const points = stars.filter((s) => s.elong < 1.45 && s.width < wCut && s.area < 40);
+  // 明るい星はにじみで幅が大きくなり、上の条件から漏れる。
+  // 丸ささえ保っていれば、明るい順に少数だけ救済して仮説の種を確保する。
+  const inPts = new Set(points);
+  let rescued = 0;
+  for (const s of stars) {
+    if (rescued >= 15) break;
+    if (inPts.has(s) || s.elong >= 1.35) continue;
+    points.push(s); inPts.add(s); rescued++;
+  }
+  const streaks = stars.filter((s) => s.elong >= 1.6);
+  points.sort((a, b) => b.flux - a.flux);
+  return {
+    points,
+    streaks,
+    junkFraction: streaks.length / stars.length,
+  };
 }
 
 /**
@@ -1126,7 +1162,7 @@ function refine(cam0, R0, cat, matches, dets, useK1) {
  * 許容円の面積 × 検出点の密度）、それを十分上回る数が合ったときだけ採用する。
  * この判定を入れないと、星が数個たまたま合っただけの誤答を拾ってしまう。
  */
-function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height) {
+function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height, checkBright) {
   let cam = cam0, R = R0;
   let matches = matchAll(cam, R, cat, grid, dets, tolPix, verifyMag);
   if (matches.length < 6) return null;
@@ -1163,6 +1199,8 @@ function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height) {
 
   // 明るい星ほど見逃しにくい。視野内にあるはずの明るい星が
   // ほとんど写っていない解は、偶然の一致を疑う。
+  // （検出点を選別して解き直すときは、明るい星が選別で落ちていることがあるので行わない）
+  if (checkBright === false) return { cam, R, matches, rms, expected, need };
   const Rt = matT(R);
   let nBright = 0, nBrightMatched = 0;
   const matched = new Set(matches.map((m) => m.cat));
@@ -1190,6 +1228,9 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
   const nHyp = Math.min(dets.length, opt.nHyp ?? 28);
   const nFirst = Math.min(nHyp, opt.nFirst ?? 14);
   const verifyMag = opt.verifyMag ?? 5.6;
+  // 明るさの差による足切り。スマホのトーンマッピングは明るさの序列を潰すことがあるため、
+  // 探索の前半だけ有効にし、当たらなければ無効にして再走する使い方を想定。
+  const magGate = opt.magGate ?? 1.6;
   const deadline = opt.deadline;
   const cat = opt.catalog;
   const quick = opt.quickCatalog || cat;
@@ -1241,7 +1282,7 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
           const ai = swap ? b : a, bi = swap ? a : b;
           if (useMag) {
             const dm = swap ? -dMag : dMag;
-            if (Math.abs(dm - dImag) > 1.6) continue;
+            if (Math.abs(dm - dImag) > magGate) continue;
           }
           const f = solveFocalFromPair(u1, v1, u2, v2, hp.cos[k], fMin, fMax);
           if (f === null) continue;
@@ -1323,7 +1364,7 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
 
           const R = [r00, r01, r02, r10, r11, r12, r20, r21, r22];
           const cam = new Camera(width, height, f, 0);
-          const got = polish(cam, R, cat, grid, dets, tolPix, verifyMag, width, height);
+          const got = polish(cam, R, cat, grid, dets, tolPix, verifyMag, width, height, opt.checkBright);
           if (got) return got;
         }
       }
@@ -1702,15 +1743,18 @@ function placeText(ctx, boxes, s, x, y, align, fontPx) {
  * 検出した点を描く。星表と一致したものと、しなかったものを描き分ける。
  * 「アプリが何を星として見たか」が見えると、うまくいかないときの切り分けができる。
  */
-function drawDetections(ctx, dets, matchedDetIndices) {
+function drawDetections(ctx, dets, matchedDetIndices, streakSet) {
   const scale = Math.hypot(ctx.canvas.width, ctx.canvas.height) / 1600;
   const matched = matchedDetIndices || new Set();
   ctx.lineWidth = Math.max(1, scale * 1.6);
   for (let i = 0; i < dets.length; i++) {
     const d = dets[i];
     const hit = matched.has(i);
+    const streak = streakSet && streakSet.has(dets[i]);
     const r = Math.max(5, scale * 9);
-    ctx.strokeStyle = hit ? 'rgba(120,255,170,0.9)' : 'rgba(255,120,120,0.85)';
+    ctx.strokeStyle = hit ? 'rgba(120,255,170,0.9)'
+      : streak ? 'rgba(255,170,80,0.8)'   // 線像（星ではない形）は橙
+      : 'rgba(255,120,120,0.85)';
     ctx.beginPath();
     if (hit) {
       ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
@@ -1937,6 +1981,22 @@ function makeSky(o = {}) {
   for (let i = 0; i < (o.spurious ?? 0); i++) {
     put(rand() * width, height - rand() * height * 0.25, 60 + rand() * 150, psf * (1 + rand()));
   }
+  // 空中の粒子（羽虫・霧雨・ちり）。近くの明かりを反射して、
+  // ランダムな向きの短い線として星より明るく写る
+  for (let i = 0; i < (o.particles ?? 0); i++) {
+    const px = rand() * width, py = rand() * height;
+    const ang = rand() * Math.PI;
+    const len = 4 + rand() * 9;
+    const amp = 50 + rand() * 130;
+    const n = Math.ceil(len * 2);
+    // 少し曲げる（弧）
+    const curve = (rand() - 0.5) * 0.8;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n - 0.5;
+      const a2 = ang + curve * t;
+      put(px + len * t * Math.cos(a2), py + len * t * Math.sin(a2), amp / n * 2.2, psf * 1.1);
+    }
+  }
   // 雲や木で一部を隠す
   if (o.occludeFrac) {
     const h = Math.round(height * o.occludeFrac);
@@ -2064,8 +2124,12 @@ async function analyze(canvas, exif) {
 
   status('写真から星を探しています…');
   await nextFrame();
-  const { stars } = detectStars(img, { maxStars: 150 });
+  // 多めに拾っておく。照合は明るい150点で行い、
+  // 選別のやり直し（2段目）は全体から点像を選び直す。
+  const { stars: allDets } = detectStars(img, { maxStars: 400 });
+  const stars = allDets.slice(0, 150);
   state.dets = stars;
+  const cls = classifyDetections(allDets);
 
   if (stars.length < 6) {
     fail(`星らしい点が ${stars.length} 個しか見つかりませんでした。`);
@@ -2078,7 +2142,6 @@ async function analyze(canvas, exif) {
 
   const base = {
     catalog, quickCatalog, hypCatalogs: tiers,
-    deadline: Date.now() + 45000,
   };
 
   // EXIF に 35mm 換算焦点距離があれば、そこから画角を絞って先に試す（ふつうは一瞬で解ける）
@@ -2093,12 +2156,36 @@ async function analyze(canvas, exif) {
   }
   if (!sol) {
     sol = await solveAsync(state.dets, canvas.width, canvas.height, {
-      ...base, deadline: Date.now() + 45000,
+      ...base, deadline: Date.now() + 40000,
     });
   }
 
+  // 2 段目: 線状の光点（虫・雨・ちり）が多い写真では、明るさ順の上位がゴミで
+  // 埋まって星の組が作れない。丸い点像だけに選び直し、明るさの足切りも外して再挑戦する。
+  if (!sol && cls.points.length >= 10 && cls.junkFraction > 0.25) {
+    const pts = cls.points.slice(0, 150);
+    status('星以外の光点を除いて照合し直しています…',
+      `${allDets.length} 個のうち点像 ${pts.length} 個で再挑戦`);
+    await nextFrame();
+    sol = await solveAsync(pts, canvas.width, canvas.height, {
+      ...base, quickCatalog: catalog, magGate: Infinity, checkBright: false,
+      deadline: Date.now() + 30000,
+    });
+    if (sol) state.dets = pts;
+  }
+
   if (!sol) {
-    fail(`星は ${stars.length} 個見つかりましたが、星図の並びと一致しませんでした。`);
+    // 何が写っていたかを診断して、撮り直しの指針に変える
+    let hint;
+    if (cls.junkFraction > 0.45) {
+      hint = `見つかった光点の大半（${Math.round(cls.junkFraction * 100)}%）が、向きのばらばらな短い線で、星の写り方ではありません。` +
+        '近くの明かりに照らされた虫・雨・霧のことが多いです。空気の澄んだ場所や別の日にもう一度試してください。';
+    } else if (stars.length < 15) {
+      hint = `星らしい光点が ${stars.length} 個と少なめでした。もっと暗い場所で、広めに撮ると手がかりが増えます。`;
+    } else {
+      hint = `星は ${stars.length} 個見つかりましたが、星図の並びと一致しませんでした。`;
+    }
+    fail(hint, cls);
     return;
   }
 
@@ -2117,7 +2204,7 @@ async function analyze(canvas, exif) {
  * 失敗時も写真と検出結果は見せる。
  * どこを光点として拾ったかが見えれば、撮り直しの手がかりになる。
  */
-function fail(reason) {
+function fail(reason, cls) {
   hideStatus();
   state.sol = null;
   state.cons = null;
@@ -2127,12 +2214,14 @@ function fail(reason) {
   if (state.dets && state.width) {
     $('stageBlock').hidden = false;
     $('headline').textContent = '特定できませんでした';
-    $('stageNote').textContent = 'アプリが光点として拾った場所に ✕ を出しています。';
+    $('stageNote').textContent = cls && cls.junkFraction > 0.45
+      ? '拾った光点: 橙✕＝星ではない形（虫・雨・霧など）、赤✕＝点だが星図と合わないもの。'
+      : 'アプリが光点として拾った場所に ✕ を出しています。';
     const ov = $('ov');
     ov.width = state.width; ov.height = state.height;
     const ctx = ov.getContext('2d');
     ctx.clearRect(0, 0, ov.width, ov.height);
-    drawDetections(ctx, state.dets, new Set());
+    drawDetections(ctx, state.dets, new Set(), cls ? new Set(cls.streaks) : null);
     // 解が無いので、星座系の切り替えは触れないようにする
     for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = true;
     $('t_dets').disabled = true;

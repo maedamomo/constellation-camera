@@ -2,7 +2,7 @@
 // 処理はすべてブラウザの中で完結する（写真はどこにも送らない）。
 
 import { STARS, LINES, INFO, NAMES } from './data.js';
-import { detectStars } from './detect.js';
+import { detectStars, classifyDetections } from './detect.js';
 import { buildCatalog, buildPairIndex, solvePlateGen } from './solve.js';
 import { readExif, fovFromFocal35 } from './exif.js';
 import { toAltAz, dirName } from './altaz.js';
@@ -88,8 +88,12 @@ async function analyze(canvas, exif) {
 
   status('写真から星を探しています…');
   await nextFrame();
-  const { stars } = detectStars(img, { maxStars: 150 });
+  // 多めに拾っておく。照合は明るい150点で行い、
+  // 選別のやり直し（2段目）は全体から点像を選び直す。
+  const { stars: allDets } = detectStars(img, { maxStars: 400 });
+  const stars = allDets.slice(0, 150);
   state.dets = stars;
+  const cls = classifyDetections(allDets);
 
   if (stars.length < 6) {
     fail(`星らしい点が ${stars.length} 個しか見つかりませんでした。`);
@@ -102,7 +106,6 @@ async function analyze(canvas, exif) {
 
   const base = {
     catalog, quickCatalog, hypCatalogs: tiers,
-    deadline: Date.now() + 45000,
   };
 
   // EXIF に 35mm 換算焦点距離があれば、そこから画角を絞って先に試す（ふつうは一瞬で解ける）
@@ -117,12 +120,36 @@ async function analyze(canvas, exif) {
   }
   if (!sol) {
     sol = await solveAsync(state.dets, canvas.width, canvas.height, {
-      ...base, deadline: Date.now() + 45000,
+      ...base, deadline: Date.now() + 40000,
     });
   }
 
+  // 2 段目: 線状の光点（虫・雨・ちり）が多い写真では、明るさ順の上位がゴミで
+  // 埋まって星の組が作れない。丸い点像だけに選び直し、明るさの足切りも外して再挑戦する。
+  if (!sol && cls.points.length >= 10 && cls.junkFraction > 0.25) {
+    const pts = cls.points.slice(0, 150);
+    status('星以外の光点を除いて照合し直しています…',
+      `${allDets.length} 個のうち点像 ${pts.length} 個で再挑戦`);
+    await nextFrame();
+    sol = await solveAsync(pts, canvas.width, canvas.height, {
+      ...base, quickCatalog: catalog, magGate: Infinity, checkBright: false,
+      deadline: Date.now() + 30000,
+    });
+    if (sol) state.dets = pts;
+  }
+
   if (!sol) {
-    fail(`星は ${stars.length} 個見つかりましたが、星図の並びと一致しませんでした。`);
+    // 何が写っていたかを診断して、撮り直しの指針に変える
+    let hint;
+    if (cls.junkFraction > 0.45) {
+      hint = `見つかった光点の大半（${Math.round(cls.junkFraction * 100)}%）が、向きのばらばらな短い線で、星の写り方ではありません。` +
+        '近くの明かりに照らされた虫・雨・霧のことが多いです。空気の澄んだ場所や別の日にもう一度試してください。';
+    } else if (stars.length < 15) {
+      hint = `星らしい光点が ${stars.length} 個と少なめでした。もっと暗い場所で、広めに撮ると手がかりが増えます。`;
+    } else {
+      hint = `星は ${stars.length} 個見つかりましたが、星図の並びと一致しませんでした。`;
+    }
+    fail(hint, cls);
     return;
   }
 
@@ -141,7 +168,7 @@ async function analyze(canvas, exif) {
  * 失敗時も写真と検出結果は見せる。
  * どこを光点として拾ったかが見えれば、撮り直しの手がかりになる。
  */
-function fail(reason) {
+function fail(reason, cls) {
   hideStatus();
   state.sol = null;
   state.cons = null;
@@ -151,12 +178,14 @@ function fail(reason) {
   if (state.dets && state.width) {
     $('stageBlock').hidden = false;
     $('headline').textContent = '特定できませんでした';
-    $('stageNote').textContent = 'アプリが光点として拾った場所に ✕ を出しています。';
+    $('stageNote').textContent = cls && cls.junkFraction > 0.45
+      ? '拾った光点: 橙✕＝星ではない形（虫・雨・霧など）、赤✕＝点だが星図と合わないもの。'
+      : 'アプリが光点として拾った場所に ✕ を出しています。';
     const ov = $('ov');
     ov.width = state.width; ov.height = state.height;
     const ctx = ov.getContext('2d');
     ctx.clearRect(0, 0, ov.width, ov.height);
-    drawDetections(ctx, state.dets, new Set());
+    drawDetections(ctx, state.dets, new Set(), cls ? new Set(cls.streaks) : null);
     // 解が無いので、星座系の切り替えは触れないようにする
     for (const key of ['lines', 'names', 'starNames', 'stars']) $('t_' + key).disabled = true;
     $('t_dets').disabled = true;

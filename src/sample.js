@@ -105,6 +105,22 @@ export function makeSky(o = {}) {
   for (let i = 0; i < (o.spurious ?? 0); i++) {
     put(rand() * width, height - rand() * height * 0.25, 60 + rand() * 150, psf * (1 + rand()));
   }
+  // 空中の粒子（羽虫・霧雨・ちり）。近くの明かりを反射して、
+  // ランダムな向きの短い線として星より明るく写る
+  for (let i = 0; i < (o.particles ?? 0); i++) {
+    const px = rand() * width, py = rand() * height;
+    const ang = rand() * Math.PI;
+    const len = 4 + rand() * 9;
+    const amp = 50 + rand() * 130;
+    const n = Math.ceil(len * 2);
+    // 少し曲げる（弧）
+    const curve = (rand() - 0.5) * 0.8;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n - 0.5;
+      const a2 = ang + curve * t;
+      put(px + len * t * Math.cos(a2), py + len * t * Math.sin(a2), amp / n * 2.2, psf * 1.1);
+    }
+  }
   // 雲や木で一部を隠す
   if (o.occludeFrac) {
     const h = Math.round(height * o.occludeFrac);

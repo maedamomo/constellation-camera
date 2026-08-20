@@ -100,15 +100,18 @@ function placeText(ctx, boxes, s, x, y, align, fontPx) {
  * 検出した点を描く。星表と一致したものと、しなかったものを描き分ける。
  * 「アプリが何を星として見たか」が見えると、うまくいかないときの切り分けができる。
  */
-export function drawDetections(ctx, dets, matchedDetIndices) {
+export function drawDetections(ctx, dets, matchedDetIndices, streakSet) {
   const scale = Math.hypot(ctx.canvas.width, ctx.canvas.height) / 1600;
   const matched = matchedDetIndices || new Set();
   ctx.lineWidth = Math.max(1, scale * 1.6);
   for (let i = 0; i < dets.length; i++) {
     const d = dets[i];
     const hit = matched.has(i);
+    const streak = streakSet && streakSet.has(dets[i]);
     const r = Math.max(5, scale * 9);
-    ctx.strokeStyle = hit ? 'rgba(120,255,170,0.9)' : 'rgba(255,120,120,0.85)';
+    ctx.strokeStyle = hit ? 'rgba(120,255,170,0.9)'
+      : streak ? 'rgba(255,170,80,0.8)'   // 線像（星ではない形）は橙
+      : 'rgba(255,120,120,0.85)';
     ctx.beginPath();
     if (hit) {
       ctx.arc(d.x, d.y, r, 0, Math.PI * 2);

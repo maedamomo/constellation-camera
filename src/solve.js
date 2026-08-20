@@ -245,7 +245,7 @@ function refine(cam0, R0, cat, matches, dets, useK1) {
  * 許容円の面積 × 検出点の密度）、それを十分上回る数が合ったときだけ採用する。
  * この判定を入れないと、星が数個たまたま合っただけの誤答を拾ってしまう。
  */
-function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height) {
+function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height, checkBright) {
   let cam = cam0, R = R0;
   let matches = matchAll(cam, R, cat, grid, dets, tolPix, verifyMag);
   if (matches.length < 6) return null;
@@ -282,6 +282,8 @@ function polish(cam0, R0, cat, grid, dets, tolPix, verifyMag, width, height) {
 
   // 明るい星ほど見逃しにくい。視野内にあるはずの明るい星が
   // ほとんど写っていない解は、偶然の一致を疑う。
+  // （検出点を選別して解き直すときは、明るい星が選別で落ちていることがあるので行わない）
+  if (checkBright === false) return { cam, R, matches, rms, expected, need };
   const Rt = matT(R);
   let nBright = 0, nBrightMatched = 0;
   const matched = new Set(matches.map((m) => m.cat));
@@ -309,6 +311,9 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
   const nHyp = Math.min(dets.length, opt.nHyp ?? 28);
   const nFirst = Math.min(nHyp, opt.nFirst ?? 14);
   const verifyMag = opt.verifyMag ?? 5.6;
+  // 明るさの差による足切り。スマホのトーンマッピングは明るさの序列を潰すことがあるため、
+  // 探索の前半だけ有効にし、当たらなければ無効にして再走する使い方を想定。
+  const magGate = opt.magGate ?? 1.6;
   const deadline = opt.deadline;
   const cat = opt.catalog;
   const quick = opt.quickCatalog || cat;
@@ -360,7 +365,7 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
           const ai = swap ? b : a, bi = swap ? a : b;
           if (useMag) {
             const dm = swap ? -dMag : dMag;
-            if (Math.abs(dm - dImag) > 1.6) continue;
+            if (Math.abs(dm - dImag) > magGate) continue;
           }
           const f = solveFocalFromPair(u1, v1, u2, v2, hp.cos[k], fMin, fMax);
           if (f === null) continue;
@@ -442,7 +447,7 @@ function* searchOnce(dets, width, height, opt, fovRange, stats) {
 
           const R = [r00, r01, r02, r10, r11, r12, r20, r21, r22];
           const cam = new Camera(width, height, f, 0);
-          const got = polish(cam, R, cat, grid, dets, tolPix, verifyMag, width, height);
+          const got = polish(cam, R, cat, grid, dets, tolPix, verifyMag, width, height, opt.checkBright);
           if (got) return got;
         }
       }

@@ -2,7 +2,7 @@
 //   node test/real-like.test.mjs
 
 import { STARS } from '../src/data.js';
-import { detectStars } from '../src/detect.js';
+import { detectStars, classifyDetections } from '../src/detect.js';
 import { buildCatalog, buildPairIndex, solvePlate } from '../src/solve.js';
 import { sph2vec, angleBetween, matVec, DEG } from '../src/astro.js';
 import { makeSky } from '../src/sample.js';
@@ -15,6 +15,21 @@ const tiers = [[3.2, 115], [4.2, 75], [5.0, 35]].map(([m, s]) => {
   return { name: `${m}等`, cat: c, pairs: buildPairIndex(c, s) };
 });
 
+// アプリと同じ2段構え: 通常の照合 → 点像だけに選別して再照合
+async function solveLadder(allDets, w, h, opts) {
+  let sol = solvePlate(allDets.slice(0, 150), w, h, { ...opts, deadline: Date.now() + 25000 });
+  if (!sol) {
+    const cls = classifyDetections(allDets);
+    if (cls.points.length >= 10 && cls.junkFraction > 0.25) {
+      sol = solvePlate(cls.points.slice(0, 150), w, h, {
+        ...opts, quickCatalog: opts.catalog, magGate: Infinity, checkBright: false,
+        deadline: Date.now() + 25000,
+      });
+    }
+  }
+  return sol;
+}
+
 const CASES = [
   { name: '弱いISP（軽い圧縮のみ）', sky: {}, isp: { quality: 92 } },
   { name: '標準的なスマホ（NR+シャープ+トーン+圧縮)', sky: {}, isp: { denoise: 2.5, sharpen: 0.6, gamma: 1.8, quality: 85 } },
@@ -26,6 +41,10 @@ const CASES = [
   { name: '地上の風景が下半分', sky: { occludeFrac: 0.5, spurious: 15 }, isp: { denoise: 3, sharpen: 0.6, gamma: 1.9, quality: 85 } },
   { name: '手持ちで少しぶれた', sky: { psf: 2.4 }, isp: { denoise: 3, sharpen: 0.6, gamma: 1.9, quality: 85 } },
   { name: '超広角＋標準ISP', sky: { fov: 105 }, isp: { denoise: 3, sharpen: 0.6, gamma: 1.9, quality: 85 } },
+  { name: '羽虫・霧雨が120個（星より明るい）', sky: { particles: 120 }, isp: { denoise: 2.5, sharpen: 0.5, gamma: 1.8, quality: 88 } },
+  // 粒子250個＋街明かりは選別後も本物が15個程度しか残らず、解けないのが実情。
+  // このケースの合格条件は「誤った星座を返さない」＋「粒子写真だと診断できる」。
+  { name: '羽虫・霧雨が250個＋街明かり（誤答しないこと）', sky: { particles: 250, glow: 80, limitMag: 4.8 }, isp: { denoise: 2.5, gamma: 1.9, quality: 88 }, expectFail: true },
 ];
 
 const BASE = { seed: 11, ra: 83, dec: 0, roll: 15, fov: 65, limitMag: 5.2, glow: 60, width: 1600, height: 1200 };
@@ -34,12 +53,19 @@ let pass = 0, fail = 0;
 for (const c of CASES) {
   const raw = makeSky({ ...BASE, ...c.sky });
   const img = throughPhoneIsp(raw, c.isp);
-  const { stars } = detectStars(img, { maxStars: 150 });
+  const { stars } = detectStars(img, { maxStars: 400 });
   const t0 = Date.now();
-  const sol = solvePlate(stars, img.width, img.height, {
-    catalog, quickCatalog, hypCatalogs: tiers, deadline: Date.now() + 30000,
+  const sol = await solveLadder(stars, img.width, img.height, {
+    catalog, quickCatalog, hypCatalogs: tiers,
   });
   const ms = Date.now() - t0;
+  if (c.expectFail) {
+    const cls = classifyDetections(stars);
+    const ok = !sol && cls.junkFraction > 0.4;
+    ok ? pass++ : fail++;
+    console.log(`${ok ? '✓' : '✗'} ${c.name}: ${sol ? '解を返してしまった（偽陽性）' : `解かず、線像率${(cls.junkFraction * 100).toFixed(0)}%と診断`} / ${ms}ms`);
+    continue;
+  }
   if (!sol) {
     console.log(`✗ ${c.name}: 解けなかった（写った星 ${raw.truth.nStars} / 検出 ${stars.length} / ${ms}ms）`);
     fail++;

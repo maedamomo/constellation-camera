@@ -187,6 +187,8 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
       stars.push({
         x: cx, y: cy, flux, area, peak, elong, touches, nCore,
         width: Math.sqrt((vxx + vyy) / 2),
+        // 伸びの主軸の向き（ラジアン, -π/2〜π/2）。手ブレで流れた星は全部同じ向きになる
+        theta: 0.5 * Math.atan2(2 * vxy, vxx - vyy),
         sat: rawPeak > 200,
       });
     }
@@ -206,6 +208,40 @@ function extractComponents(sm, sub, noise, width, height, kSigma, kf, opt) {
   kept.sort((a, b) => b.flux - a.flux);
   for (const s of kept) s.psf = opt.psf;
   return kept;
+}
+
+/**
+ * 検出した光点を「点像（星らしい）」と「線像（星以外らしい）」に分ける。
+ *
+ * 空中の粒子（羽虫・霧雨・ちり）が近くの明かりを反射すると、
+ * ランダムな向きの短い線として星より明るく写り、明るさ順の上位を占拠する。
+ * 星は点像に写るので、丸くて小さい成分だけを選び直せば照合の材料にできる。
+ * しきい値は画像内の分布から相対的に決める（機種やピントで点像の幅が変わるため）。
+ */
+export function classifyDetections(stars) {
+  if (stars.length < 8) {
+    return { points: stars.slice(), streaks: [], junkFraction: 0 };
+  }
+  const ws = stars.map((s) => s.width).sort((a, b) => a - b);
+  const p25 = ws[Math.floor(ws.length * 0.25)];
+  const wCut = Math.max(1.8, p25 * 1.4);
+  const points = stars.filter((s) => s.elong < 1.45 && s.width < wCut && s.area < 40);
+  // 明るい星はにじみで幅が大きくなり、上の条件から漏れる。
+  // 丸ささえ保っていれば、明るい順に少数だけ救済して仮説の種を確保する。
+  const inPts = new Set(points);
+  let rescued = 0;
+  for (const s of stars) {
+    if (rescued >= 15) break;
+    if (inPts.has(s) || s.elong >= 1.35) continue;
+    points.push(s); inPts.add(s); rescued++;
+  }
+  const streaks = stars.filter((s) => s.elong >= 1.6);
+  points.sort((a, b) => b.flux - a.flux);
+  return {
+    points,
+    streaks,
+    junkFraction: streaks.length / stars.length,
+  };
 }
 
 /**
