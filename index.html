@@ -1,5 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
 <title>星座カメラ</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--
+  charset は必ず書く。このファイルは Web で配るだけでなく、
+  1 枚だけ手元に置いて file:// で開く使い方も想定している。
+  その経路には Content-Type ヘッダが無いので、宣言が無いと日本語が文字化けする。
+  color-scheme を dark に固定すると、スクロールバーや入力欄など
+  ブラウザ側が描く部品も暗い側に揃う（配色を暗部に振り切った意図と合わせる）。
+-->
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#04060e">
+<meta name="description" content="夜空の写真から、写っている星座を割り出して線と名前を重ねて描きます。写真は端末の外に出ません。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="星座カメラ">
+<meta property="og:description" content="夜空の写真から、写っている星座を割り出して線と名前を重ねて描きます。写真は端末の外に出ません。">
+<meta property="og:url" content="https://maedamomo.github.io/constellation-camera/">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary">
 <style>
   /*
     配色は題材そのものから取っている。天頂の濃紺から地平の街明かりへ向かう縦のグラデーション、
@@ -114,6 +134,8 @@
   footer a { color: var(--muted); }
   #saveImg { width: 100%; height: auto; margin-top: 12px; border-radius: var(--radius); }
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <header>
@@ -195,6 +217,9 @@
     <p>
       仕組み: 写真から点光源を検出し、2 つの星の組み合わせを星表の組み合わせに仮に対応させて焦点距離と向きを算出、
       他の星がどれだけ合うかで正解を選びます（プレートソルビング）。画角が分からなくても解けます。
+    </p>
+    <p>
+      ソースコードは <a href="https://github.com/maedamomo/constellation-camera">GitHub</a>（MIT ライセンス）にあります。
     </p>
   </footer>
 </div>
@@ -2319,3 +2344,6 @@ function init() {
 init();
 
 </script>
+
+</body>
+</html>

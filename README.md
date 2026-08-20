@@ -2,7 +2,9 @@
 
 夜空の写真から、写っている星座を割り出して重ねて描く Web サービス。
 
-HTML **1 ファイル**（`index.html`, 約 234KB）で完結する。サーバーもビルド済みバンドルの配信も不要で、
+**https://maedamomo.github.io/constellation-camera/**
+
+HTML **1 ファイル**（`index.html`, 約 235KB）で完結する。サーバーもビルド済みバンドルの配信も不要で、
 ブラウザで開けばそのまま動く。**写真は端末の外に出ない**（このページは一切通信しない）。
 
 - 運営・意思決定の記録は `maedamomo/self-management` の `星座カメラ/README.md` にある。**コードはこちらが正**。
@@ -48,6 +50,11 @@ EXIF に 35mm 換算焦点距離があれば探索範囲を絞れるので、そ
 
 ```
 index.html          単一ファイルの完成品（tools/build.mjs が生成。これを配布する）
+LICENSE             MIT
+THIRD-PARTY-NOTICES.md  星表データ（d3-celestial, BSD-3-Clause）の条件
+.github/workflows/
+  pages.yml         main への push で GitHub Pages に公開する
+  test.yml          テストと、index.html が src/ と一致しているかの確認
 src/
   data.js           星表・星座線・日本語名（tools/build-data.mjs が生成）
   astro.js          座標変換・カメラ投影・天球の近傍検索
@@ -82,6 +89,23 @@ node test/exif-altaz.test.mjs
 
 Node 18 以降。外部パッケージへの依存はない。
 
+## 公開
+
+`main` に push すると `.github/workflows/pages.yml` が `src/` から `index.html` を組み立て直し、
+それ 1 枚を GitHub Pages に置く。リポジトリをそのまま配信していないので、公開されているページと
+`src/` の中身がずれることはない。
+
+初回だけリポジトリ側の設定が要る（コードでは変えられない）。
+
+1. Settings → General → Danger Zone → **Change visibility** で public にする
+   （Pages を無料で使うにはリポジトリが public である必要がある）
+2. Settings → Pages → Build and deployment → Source を **GitHub Actions** にする
+3. Actions タブから `pages` を実行するか、`main` に push する
+
+公開先は `https://maedamomo.github.io/constellation-camera/`。
+`index.html` の OGP と footer のリンクもこの URL を前提にしているので、別の場所に置くなら
+`tools/template.html` の `og:url` も直す。
+
 ## 精度と限界
 
 | 項目 | 内容 |
@@ -106,3 +130,11 @@ Node 18 以降。外部パッケージへの依存はない。
 
 `src/data.js` は上記から生成した二次データであり、d3-celestial の BSD-3-Clause 表示を
 `index.html` のフッターに記載している。
+
+## ライセンス
+
+コードは MIT（`LICENSE`）。
+
+ただし星表データだけは別で、`src/data.js` と、それを埋め込んだ `index.html` には
+d3-celestial 由来の BSD-3-Clause のデータが入っている。**`index.html` を 1 枚配るだけでも
+この条件がかかる**ので、再配布するときは `THIRD-PARTY-NOTICES.md` も一緒に渡すこと。

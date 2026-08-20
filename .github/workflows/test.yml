@@ -1,0 +1,38 @@
+# テストと、index.html が src/ と食い違っていないかの確認。
+#
+# index.html は生成物だがコミットしている（1 ファイルで完結させるため）。
+# src/ だけ直して再ビルドを忘れると、配布物が古いまま公開されてしまう。
+# それを CI で止める。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 合成夜空 18 ケース
+        run: node test/solve.test.mjs
+
+      - name: EXIF 読み取りと地平座標変換
+        run: node test/exif-altaz.test.mjs
+
+      - name: index.html が src/ から組み立てた結果と一致するか
+        run: |
+          node tools/build.mjs
+          git diff --exit-code -- index.html \
+            || { echo '::error::index.html が古い。node tools/build.mjs を実行してコミットすること'; exit 1; }

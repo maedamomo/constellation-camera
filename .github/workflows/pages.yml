@@ -1,0 +1,55 @@
+# GitHub Pages に公開する。
+#
+# 配るのは index.html 1 枚だけ。リポジトリをそのまま配信するのではなく、
+# ここで src/ から組み立て直したものを置く。こうしておくと
+# 「公開されているページ」と「src/ の中身」がずれない。
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 公開は 1 本ずつ。実行中のデプロイは中断しない（中途半端な状態で残らないように）。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 星表データ (src/data.js) はコミット済みなので取得は不要。組み立てるだけ。
+      - name: index.html を組み立てる
+        run: node tools/build.mjs
+
+      - name: 配布物をまとめる
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          # Jekyll の変換を通さずそのまま配信させる
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
