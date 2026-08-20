@@ -25,8 +25,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: 合成夜空 18 ケース
+      - name: 合成夜空 20 ケース
         run: node test/solve.test.mjs
+
+      - name: スマホの画像処理を通した10ケース
+        run: node test/real-like.test.mjs
 
       - name: EXIF 読み取りと地平座標変換
         run: node test/exif-altaz.test.mjs
